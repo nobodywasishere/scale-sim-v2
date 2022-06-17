@@ -1,4 +1,7 @@
 import time
+import os
+import shutil
+import math
 import numpy as np
 from tqdm import tqdm
 
@@ -8,9 +11,13 @@ from scalesim.memory.read_port import read_port as rdport
 from scalesim.memory.write_buffer import write_buffer as wrbuf
 from scalesim.memory.write_port import write_port as wrport
 
+from copy import deepcopy as dc
+# import seaborn as sns
 
 class double_buffered_scratchpad:
     def __init__(self):
+        self.layer_id = 0
+
         self.ifmap_buf = rdbuf()
         self.filter_buf = rdbuf()
         self.ofmap_buf =wrbuf()
@@ -20,6 +27,7 @@ class double_buffered_scratchpad:
         self.ofmap_port = wrport()
 
         self.verbose = True
+        self.output_path = "../"
 
         self.ifmap_trace_matrix = np.zeros((1,1), dtype=np.int)
         self.filter_trace_matrix = np.zeros((1,1), dtype=np.int)
@@ -55,16 +63,28 @@ class double_buffered_scratchpad:
         self.traces_valid = False
         self.params_valid_flag = True
 
+        #maz
+        #self.per_mac_compute_array_for_all_steps
+
+        #xuesi
+        self.cycles_per_sample = 1
+
     #
     def set_params(self,
                    verbose=True,
+                   layer_id = 0,
                    estimate_bandwidth_mode=False,
                    word_size=1,
                    ifmap_buf_size_bytes=2, filter_buf_size_bytes=2, ofmap_buf_size_bytes=2,
                    rd_buf_active_frac=0.5, wr_buf_active_frac=0.5,
-                   ifmap_backing_buf_bw=1, filter_backing_buf_bw=1, ofmap_backing_buf_bw=1):
+                   ifmap_backing_buf_bw=1, filter_backing_buf_bw=1, ofmap_backing_buf_bw=1,
+                   sampling_rate=1,
+                   output_path="../"):
 
+        #breakpoint()
         self.estimate_bandwidth_mode = estimate_bandwidth_mode
+        self.cycles_per_sample = sampling_rate
+        self.output_path = output_path
 
         if self.estimate_bandwidth_mode:
             self.ifmap_buf = rdbuf_est()
@@ -104,6 +124,7 @@ class double_buffered_scratchpad:
                                   backing_buf_bw=ofmap_backing_buf_bw)
 
         self.verbose = verbose
+        self.layer_id = layer_id
 
         self.params_valid_flag = True
 
@@ -148,25 +169,101 @@ class double_buffered_scratchpad:
 
         return out_cycles_arr_np
 
-    #
+    #maz
+    def compute_step(self, array, row_num, col_num):
+        for i in range(row_num):
+            for j in range(col_num-1, -1, -1):
+                array[i][j]['ifmap'] = array[i][j-1]['ifmap']
+        for j in range(col_num):
+            for i in range(row_num-1, -1, -1):
+                array[i][j]['filter'] = array[i-1][j]['filter']
+        return array
+
     def service_memory_requests(self, ifmap_demand_mat, filter_demand_mat, ofmap_demand_mat):
+        r""" needs short description
+
+        Parameters
+        ----------
+        ifmap_demand_mat
+            which ifmap addresses are used in each step
+        filter_demand_mat
+            which filter addresses are used in each step
+        ofmap_demand_mat
+            which ofmap addresses are used in each step
+        """
         assert self.params_valid_flag, 'Memories not initialized yet'
 
+        #breakpoint()
+
+        #maz
+        keys = ['ifmap', 'filter', 'is_active']
+        values = [-1, -1, 0]
+        mac_compute_dict = dict(zip(keys, values))
+        systolic_array_row_number = ifmap_demand_mat.shape[1]
+        systolic_array_col_number = filter_demand_mat.shape[1]
+        per_mac_compute_array_for_one_step = []
+        
+        for i in range(systolic_array_row_number):
+            mac_compute_row = []
+            for j in range(systolic_array_col_number):
+                mac_compute_row.append(mac_compute_dict.copy())
+            per_mac_compute_array_for_one_step.append(mac_compute_row)
+        per_mac_compute_array_for_all_steps = []
+        
+        # maz
+        # index 0 of ofmap_demand_mat shows n * m 
+        # where n is the total_number_of_folds (row_folds + col_folds)
+        # and m is the number_of_compute_steps_in_each_fold
         ofmap_lines = ofmap_demand_mat.shape[0]
+
+        for i in range(systolic_array_row_number):
+            mac_compute_row = []
+            for j in range(systolic_array_col_number):
+                mac_compute_row.append(mac_compute_dict.copy())
+            per_mac_compute_array_for_one_step.append(mac_compute_row)
+        per_mac_compute_array_for_all_steps = []
+
 
         self.total_cycles = 0
         self.stall_cycles = 0
+        self.steps = 0
 
+        # maz & xuesi
+        # hit latency values seem to be dependant on whether we are using
+        # estimated BW or not.
+        # However I did not find it to be set to a value other than 1.
         ifmap_hit_latency = self.ifmap_buf.get_hit_latency()
         filter_hit_latency = self.ifmap_buf.get_hit_latency()
 
         ifmap_serviced_cycles = []
         filter_serviced_cycles = []
         ofmap_serviced_cycles = []
-
+        
+        outputDir = self.output_path
+        if (self.layer_id == 0):
+            activityArray = np.zeros([10, systolic_array_row_number, systolic_array_col_number], dtype=np.uint16)
+            curr_cycle = 0 # variable used to index into persistant activity array
+        else:
+            try:
+                activityArray_fname = outputDir + "/activityArray.npy"
+                activityArray = np.load(activityArray_fname)                
+            except FileNotFoundError:
+                print("Error: Expected activityArray at {} but not found.".format(activityArray_fname))
+                exit()
+            try:
+                curr_cycle_fname = "{}/curr_cycle.npy".format(outputDir)
+                curr_cycle = np.load(curr_cycle_fname)[0]
+            except FileNotFoundError:
+                print("Error: Expected curr_cycle at {} but not found.".format(curr_cycle_fname))
+                exit()
+                
         pbar_disable = not self.verbose
         for i in tqdm(range(ofmap_lines), disable=pbar_disable):
-
+            
+            if (activityArray.shape[0]-1 < math.floor(curr_cycle/self.cycles_per_sample)):
+                [samples, rows, cols] = activityArray.shape
+                activityArray.resize([samples+10, rows, cols])
+            #breakpoint()
             cycle_arr = np.zeros((1,1)) + i + self.stall_cycles
 
             ifmap_demand_line = ifmap_demand_mat[i, :].reshape((1,ifmap_demand_mat.shape[1]))
@@ -189,6 +286,60 @@ class double_buffered_scratchpad:
 
             self.stall_cycles += int(max(ifmap_stalls[0], filter_stalls[0], ofmap_stalls[0]))
 
+            #maz
+            this_step_stall = int(max(ifmap_stalls[0], filter_stalls[0], ofmap_stalls[0]))
+
+            # reset the activity of all cells at the beginning of each step
+            # for k in range(systolic_array_row_number):
+            #     for j in range(systolic_array_col_number):
+            #         per_mac_compute_array_for_one_step[k][j]['is_active'] = 0
+
+            for k in range(this_step_stall):
+                per_mac_compute_array_for_all_steps.append(dc(per_mac_compute_array_for_one_step))
+                
+            per_mac_compute_array_for_one_step = self.compute_step(per_mac_compute_array_for_one_step, systolic_array_row_number, systolic_array_col_number)
+
+            for idx, val in enumerate(ifmap_demand_line[0]):
+                per_mac_compute_array_for_one_step[idx][0]['ifmap'] = val
+            for idx, val in enumerate(filter_demand_line[0]):
+                per_mac_compute_array_for_one_step[0][idx]['filter'] = val
+            
+            for k in range(systolic_array_row_number):
+                for j in range(systolic_array_col_number):
+                    if (per_mac_compute_array_for_one_step[k][j]['ifmap'] != -1 and 
+                        per_mac_compute_array_for_one_step[k][j]['filter'] != -1):
+                        per_mac_compute_array_for_one_step[k][j]['is_active'] = 1
+                        activityArray[math.floor(curr_cycle/self.cycles_per_sample)][k][j] += 1
+
+                        # if sample_cycle_count > self.cycles_per_sample: 
+                        #     activityArray[sample_count] = activityArray_per_sample
+                        #     activityArray_per_sample = np.zeros((systolic_array_row_number, systolic_array_col_number), dtype=np.int8)
+                        #     sample_count += 1
+                        #     sample_cycle_count = 0
+                            
+
+                        # activityArray[i][k][j] = 1
+                    
+            self.steps += 1
+            curr_cycle += 1
+            # ax = sns.heatmap(sumArray, cmap="GnBu", linewidths=.5, cbar=False)
+            # ax.figure.savefig('../figs/activity_' + str(i).zfill(5) + '.png', format='png', bbox_inches='tight', pad_inches=0)
+            
+            # per_mac_compute_array_for_all_steps.append(dc(per_mac_compute_array_for_one_step))
+            #breakpoint()
+        cwd = os.getcwd()
+        outputDir = self.output_path + "/activityArrays"
+        if os.path.exists(outputDir) and self.layer_id == 0:
+            shutil.rmtree(outputDir)
+            os.makedirs(outputDir)
+        os.chdir(self.output_path)
+        activityArray_name = "activityArray.npy"
+        np.save(activityArray_name, activityArray)
+        np.save("curr_cycle.npy", [curr_cycle])
+        os.chdir(cwd)
+        print("size of activityArray")
+        print(activityArray.shape)
+
         if self.estimate_bandwidth_mode:
             # IDE shows warning as complete_all_prefetches is not implemented in read_buffer class
             # It is harmless since, in estimate bandwidth mode, read_buffer_estimate_bw is instantiated
@@ -209,7 +360,15 @@ class double_buffered_scratchpad:
         self.total_cycles = int(ofmap_serviced_cycles[-1][0])
 
         # END of serving demands from memory
+        #sumArray = np.zeros((32, 32))
+        #for i in range(systolic_array_row_number):
+        #    for j in range(systolic_array_col_number):
+        #        for k in range(ofmap_lines):
+        #            sumArray[i][j] += per_mac_compute_array_for_all_steps[k][i][j]['is_active']
+        # breakpoint()
         self.traces_valid = True
+
+
 
     # This is the trace computation logic of this memory system
     # Anand: This is too complex, perform the serve cycle by cycle for the requests

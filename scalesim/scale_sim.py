@@ -10,7 +10,11 @@ class scalesim:
                  verbose=True,
                  config='',
                  topology='',
+                 output_path='../',
+                 sampling_rate=1,
                  input_type_gemm=False):
+        self.output_path = '../'
+        self.sampling_rate = sampling_rate
 
         # Data structures
         self.config = scale_config()
@@ -31,12 +35,14 @@ class scalesim:
         self.run_done_flag = False
         self.logs_generated_flag = False
 
-        self.set_params(config_filename=config, topology_filename=topology)
+        self.set_params(config_filename=config, topology_filename=topology, output_path=output_path)
 
     #
     def set_params(self,
                    config_filename='',
-                   topology_filename='' ):
+                   topology_filename='',
+                   sampling_rate=1,
+                   output_path='../'):
         # First check if the user provided a valid topology file
         if not topology_filename == '':
             if not os.path.exists(topology_filename):
@@ -54,6 +60,13 @@ class scalesim:
             exit()
         else: 
             self.config_file = config_filename
+        
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+        self.output_path = output_path
+
+        if not sampling_rate == 1:
+            self.sampling_rate = sampling_rate
 
         # Parse config first
         self.config.read_conf_file(self.config_file)
@@ -68,11 +81,13 @@ class scalesim:
         # Parse the topology
         self.topo.load_arrays(topofile=self.topology_file, mnk_inputs=self.read_gemm_inputs)
 
-        #num_layers = self.topo.get_num_layers()
-        #self.config.scale_memory_maps(num_layers=num_layers)
 
     #
     def run_scale(self, top_path='.'):
+        cwd = os.getcwd()
+        outputDir = cwd + "/activityArrays"
+        if not os.path.exists(outputDir):
+            os.makedirs(outputDir)
 
         self.top_path = top_path
         save_trace = not self.save_space
@@ -80,6 +95,8 @@ class scalesim:
             config_obj=self.config,
             topo_obj=self.topo,
             top_path=self.top_path,
+            output_path=self.output_path,
+            sampling_rate=self.sampling_rate,
             verbosity=self.verbose_flag,
             save_trace=save_trace
         )

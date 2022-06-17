@@ -29,3 +29,8 @@ clean:
 	rm -rf dist
 	rm -rf build
 
+setup:
+	rm -rf ${venvdir}
+	python3 -m venv ${venvdir}
+	source ${venvdir}/bin/activate && \
+	pip install -e .

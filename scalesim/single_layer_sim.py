@@ -20,6 +20,7 @@ class single_layer_sim:
         self.memory_system = mem_dbsp()
 
         self.verbose = True
+        self.output_path = "../"
 
         # Report items : Compute report
         self.total_cycles = 0
@@ -68,14 +69,21 @@ class single_layer_sim:
         self.runs_ready = False
         self.report_items_ready = False
 
+        #xuesi
+        self.cycles_per_sample = 1
+
     def set_params(self,
                    layer_id=0,
-                   config_obj=cfg(), topology_obj=topo(),
-                   verbose=True):
+                   config_obj=cfg(), 
+                   topology_obj=topo(),
+                   sampling_rate=1,
+                   verbose=True,
+                   output_path="../"):
 
         self.layer_id = layer_id
         self.config = config_obj
         self.topo = topology_obj
+        self.output_path = output_path
 
         self.op_mat_obj.set_params(layer_id=self.layer_id,
                                    config_obj=self.config,
@@ -96,6 +104,9 @@ class single_layer_sim:
 
         self.params_set_flag = True
 
+        #xuesi
+        self.cycles_per_sample = sampling_rate
+        
     # This communicates that the memory is being managed externally
     # And the class will not interfere with setting it up
     def set_memory_system(self, mem_sys_obj=mem_dbsp()):
@@ -159,6 +170,7 @@ class single_layer_sim:
 
             self.memory_system.set_params(
                     word_size=word_size,
+                    layer_id=self.layer_id,
                     ifmap_buf_size_bytes=ifmap_buf_size_bytes,
                     filter_buf_size_bytes=filter_buf_size_bytes,
                     ofmap_buf_size_bytes=ofmap_buf_size_bytes,
@@ -167,7 +179,9 @@ class single_layer_sim:
                     filter_backing_buf_bw=filter_backing_bw,
                     ofmap_backing_buf_bw=ofmap_backing_bw,
                     verbose=self.verbose,
-                    estimate_bandwidth_mode=estimate_bandwidth_mode
+                    estimate_bandwidth_mode=estimate_bandwidth_mode,
+                    sampling_rate=self.cycles_per_sample,
+                    output_path = self.output_path
             )
 
         # 2.2 Install the prefetch matrices to the read buffers to finish setup

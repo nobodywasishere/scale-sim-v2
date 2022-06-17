@@ -8,6 +8,7 @@ test_runs
 */*/*/__pycache__
 topologies/*.zip
 
+venv
 .DS_Store
 */.DS_Store
 */*/.DS_Store
